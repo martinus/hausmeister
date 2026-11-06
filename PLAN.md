@@ -84,7 +84,7 @@ The core shows a warning for an unknown key, so that a typo does not stay hidden
 
 - Required. It must be executable.
 - Exit code 0 means success. Any other exit code means failure.
-- It runs in a pseudo-terminal in the current terminal, so progress bars and prompts work.
+- Its stdout and stderr are a pseudo-terminal, so progress bars work. stdin is the terminal of hausmeister, so prompts work.
 - On failure, it can write one line with the reason to the file `$HAUSMEISTER_REASON`. The overview shows it.
 - It can write one line to the file `$HAUSMEISTER_NOTE`, also on success. The overview shows it next to the step, for example "Firmware updates available. Run: fwupdmgr update".
 - If the update needs a reboot, it creates the file `$HAUSMEISTER_REBOOT`. The overview then shows "Reboot needed". Example: `dnf/update` runs `dnf needs-restarting -r` at the end. `apt/update` checks for `/var/run/reboot-required`.
@@ -221,14 +221,14 @@ This part comes before the sudo part, so that hausmeister asks for the password 
 3. Start a daemon thread. It runs `sudo -n -v` every 60 seconds to keep the cache alive. A `threading.Event` stops it at the end.
 4. The steps run root commands with `$SUDO`, which is `sudo -n`.
 
-This part runs inside tmux. On Fedora and Ubuntu, sudo stores the cache per terminal (`timestamp_type=tty`), and a tmux pane is a new terminal. A password typed before the tmux start does not apply in the pane.
+This part runs inside tmux. On Fedora and Ubuntu, sudo stores the cache per terminal (`timestamp_type=tty`), and a tmux pane is a new terminal. A password typed before the tmux start does not apply in the pane. For the same reason, a step must keep the controlling terminal of hausmeister: in its own terminal, `sudo -n` fails with "a password is required".
 
 ### 5. Run the steps
 
 1. Read `VERSION_ID` from `/etc/os-release` and remember it.
 2. Run the steps that apply, sorted by `order`, then by id.
 3. Show a header line with the clock time and the step name, for example `── 04:19:26 · rustup · Rust toolchains ──`. When you attach to tmux later, you see when each step started and which one is still running.
-4. Run `update` in a pseudo-terminal with `pty.spawn`. The output goes directly to the screen. A callback also copies it to `~/.local/state/hausmeister/last-run/<step>.log` and keeps the last 40 lines in memory.
+4. Run `update` with stdout and stderr on a new pseudo-terminal (`pty.openpty`), so progress bars work. stdin and the controlling terminal stay the ones of hausmeister, so prompts and `Ctrl-C` reach the step directly. Do not use `pty.spawn`: it makes the new pseudo-terminal the controlling terminal of the step, and then `sudo -n` does not find the cached password (see part 4). The output goes directly to the screen. hausmeister also copies it to `~/.local/state/hausmeister/last-run/<step>.log` and keeps the last 40 lines in memory.
 5. Record the exit code (`os.waitstatus_to_exitcode`), the duration, the first line of the reason file, the first line of the note file, and if the reboot file exists.
 6. If the step fails, continue with the next step. Do not ask.
 7. `Ctrl-C` stops the current step and marks it as "cancelled". A second `Ctrl-C` in 2 seconds stops the full run. The overview comes in both cases.

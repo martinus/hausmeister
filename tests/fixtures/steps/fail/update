@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+echo "first line"
+echo "something broke"
+exit 1

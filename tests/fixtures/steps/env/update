@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+echo "SUDO=$SUDO"
+echo "DISTRO=$HAUSMEISTER_DISTRO"
+echo "VERSION_ID=$HAUSMEISTER_VERSION_ID"
+echo "STEP_DIR=$HAUSMEISTER_STEP_DIR"
+echo "PWD=$PWD"
+[ -t 1 ] && echo "stdout is a terminal"

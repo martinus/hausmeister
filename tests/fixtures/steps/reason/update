@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+echo "Network is down" > "$HAUSMEISTER_REASON"
+exit 3

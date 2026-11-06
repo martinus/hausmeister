@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -uo pipefail
+# dnf upgrade stays in the current release.
+$SUDO dnf upgrade --refresh -y || exit 1
+
+# needs-restarting exits with 1 when a reboot is needed. dnf4 needs
+# dnf-plugins-core for it, so first check that the command exists.
+if dnf needs-restarting --help >/dev/null 2>&1; then
+    dnf needs-restarting -r >/dev/null 2>&1
+    [ $? -eq 1 ] && touch "$HAUSMEISTER_REBOOT"
+fi
+exit 0

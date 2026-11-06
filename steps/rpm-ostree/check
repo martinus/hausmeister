@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# rpm-ostree only does the update on a system that booted from an ostree image.
+[ -e /run/ostree-booted ]

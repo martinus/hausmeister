@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# dnf does not work on Fedora Atomic. The rpm-ostree step does the update there.
+[ ! -e /run/ostree-booted ]

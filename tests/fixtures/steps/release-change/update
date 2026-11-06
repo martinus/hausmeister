@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# The test points FAKE_OS_RELEASE to a copy of an os-release file.
+sed -i 's/^VERSION_ID=.*/VERSION_ID=99/' "$FAKE_OS_RELEASE"
