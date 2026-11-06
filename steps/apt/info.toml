@@ -1,0 +1,5 @@
+name = "System packages (apt)"
+description = "Runs apt-get update and apt-get full-upgrade -y"
+needs = "apt-get"
+sudo = true
+order = 10

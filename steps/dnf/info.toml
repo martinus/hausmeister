@@ -1,0 +1,5 @@
+name = "System packages (dnf)"
+description = "Runs dnf upgrade --refresh -y"
+needs = "dnf"
+sudo = true
+order = 10

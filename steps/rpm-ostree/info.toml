@@ -1,0 +1,5 @@
+name = "System image (rpm-ostree)"
+description = "Runs rpm-ostree upgrade"
+needs = "rpm-ostree"
+sudo = true
+order = 10

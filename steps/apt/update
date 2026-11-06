@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -uo pipefail
+# full-upgrade stays in the current release: it does not change the sources.
+$SUDO apt-get update || exit 1
+$SUDO apt-get full-upgrade -y || exit 1
+[ -e /var/run/reboot-required ] && touch "$HAUSMEISTER_REBOOT"
+exit 0

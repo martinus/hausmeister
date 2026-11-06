@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -uo pipefail
+# rpm-ostree upgrade stays in the current release.
+# With --unchanged-exit-77, exit code 77 means there was nothing to do.
+$SUDO rpm-ostree upgrade --unchanged-exit-77
+rc=$?
+[ $rc -eq 77 ] && exit 0
+[ $rc -ne 0 ] && exit $rc
+# The new image is staged and becomes active with the next boot.
+touch "$HAUSMEISTER_REBOOT"
