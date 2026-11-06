@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# The test sets MARKER. A short sleep gives the keep-alive thread time to run.
+sleep 0.4
+touch "$MARKER"

@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import termios
+import threading
 import time
 import tomllib
 from pathlib import Path
@@ -201,6 +202,57 @@ def missing_needs(needs: str, path: str | None) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# sudo cache
+# ---------------------------------------------------------------------------
+
+SUDO_VALIDATE = ["sudo", "-v"]
+SUDO_REFRESH = ["sudo", "-n", "-v"]
+SUDO_REFRESH_INTERVAL = 60.0
+NO_SUDO = "No sudo password"
+
+
+def cache_sudo(command: list[str] | None = None) -> bool:
+    """Ask for the sudo password one time. True if sudo has the password now."""
+    try:
+        return subprocess.run(command or SUDO_VALIDATE).returncode == 0
+    except (OSError, KeyboardInterrupt):
+        return False
+
+
+class SudoKeepAlive:
+    """Refreshes the sudo cache in the background, so that a long step does not
+    let it expire for the steps after it. The refresh keeps the controlling
+    terminal of hausmeister, so it refreshes the same cache that the steps use."""
+
+    def __init__(self, command: list[str] | None = None, interval: float | None = None):
+        self.command = command or SUDO_REFRESH
+        self.interval = interval or SUDO_REFRESH_INTERVAL
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="sudo-keep-alive", daemon=True)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval):
+            try:
+                subprocess.run(
+                    self.command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=15)
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -275,6 +327,7 @@ class Result:
     note: str = ""
     reboot: bool = False
     tail: list[str] = dataclasses.field(default_factory=list)
+    ran: bool = True
 
 
 def write_all(fd: int, data: bytes) -> None:
@@ -409,11 +462,17 @@ def run_step(step: Step, env: dict[str, str], version_id: str, os_release: Path,
     return result, stop
 
 
-def run_steps(steps: list[Step], env: dict[str, str], os_release: Path, out_fd: int) -> tuple[list[Result], bool]:
+def run_steps(
+    steps: list[Step], env: dict[str, str], os_release: Path, out_fd: int, have_sudo: bool = True
+) -> tuple[list[Result], bool]:
     """Run the steps in sequence. A failure does not stop the run, two Ctrl-C
-    within 2 seconds do. Returns the results and True if the run was stopped."""
+    within 2 seconds do. Without have_sudo, the steps with sudo = true fail
+    without running. Returns the results and True if the run was stopped."""
     results = []
     for step in steps:
+        if step.sudo and not have_sudo:
+            results.append(Result(step, "FAILED", 0, 0.0, reason=NO_SUDO, ran=False))
+            continue
         # Read it before each step, so that only the step that changed it fails.
         version_id = read_os_release(os_release).get("VERSION_ID", "")
         result, stop = run_step(step, env, version_id, os_release, out_fd)
@@ -481,7 +540,7 @@ def render_overview(
     for r in results:
         if r.status == "ok":
             continue
-        out.append(f" ✘ {r.step.id} · {describe_exit(r.exit_code)}")
+        out.append(f" ✘ {r.step.id} · {describe_exit(r.exit_code) if r.ran else 'not run'}")
         if r.reason:
             out.append(f"   Reason: {r.reason}")
         out += [f"   > {line}" for line in r.tail]
@@ -516,7 +575,19 @@ def update(
 
     started = datetime.datetime.now()
     to_run = [s for s in steps if s.state == INSTALLED and s.default]
-    results, stopped = run_steps(to_run, env, os_release, out_fd)
+
+    keep_alive = None
+    have_sudo = True
+    if any(s.sudo for s in to_run):
+        have_sudo = cache_sudo()
+        if have_sudo:
+            keep_alive = SudoKeepAlive()
+            keep_alive.start()
+    try:
+        results, stopped = run_steps(to_run, env, os_release, out_fd, have_sudo)
+    finally:
+        if keep_alive:
+            keep_alive.stop()
     overview = render_overview(distro, steps, results, started, datetime.datetime.now(), stopped)
     write_all(out_fd, ("\n" + overview + "\n").encode())
     return 0 if all(r.status == "ok" for r in results) and not stopped else 1
