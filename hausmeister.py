@@ -8,6 +8,7 @@ one after the other and shows an overview. PLAN.md describes the contract.
 
 import argparse
 import concurrent.futures
+import curses
 import dataclasses
 import datetime
 import errno
@@ -338,6 +339,87 @@ def general_setting(config: dict, key: str) -> tuple[bool, str]:
     return value, ""
 
 
+def read_selection(config: dict) -> tuple[dict[str, bool] | None, list[str]]:
+    """The [select] table, or None if there is none. Returns warnings too."""
+    table = config.get("select")
+    if table is None:
+        return None, []
+    if not isinstance(table, dict):
+        return None, ["config: select must be a table. Ignoring it."]
+    selection, warnings = {}, []
+    for step_id, value in table.items():
+        if type(value) is bool:
+            selection[step_id] = value
+        else:
+            warnings.append(f"config: select.{step_id} must be true or false. The step does not run.")
+            selection[step_id] = False
+    return selection, warnings
+
+
+BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
+TABLE_HEADER = re.compile(r"^[ \t]*\[")
+SELECT_HEADER = re.compile(r"^[ \t]*\[[ \t]*select[ \t]*\][ \t]*(#.*)?$")
+
+
+def toml_key(key: str) -> str:
+    if BARE_KEY.fullmatch(key):
+        return key
+    escaped = "".join(
+        c if c.isprintable() and c not in '"\\' else (f"\\u{ord(c):04x}" if ord(c) <= 0xFFFF else f"\\U{ord(c):08x}")
+        for c in key
+    )
+    return f'"{escaped}"'
+
+
+def render_select(selection: dict[str, bool]) -> str:
+    lines = ["[select]"] + [f"{toml_key(k)} = {str(v).lower()}" for k, v in selection.items()]
+    return "\n".join(lines) + "\n"
+
+
+def rewrite_select(text: str, selection: dict[str, bool]) -> str:
+    """Replace the text of the [select] table: from its header to the next
+    table header or the end. All other lines stay byte for byte. Without a
+    table, add it at the end."""
+    lines = text.splitlines(keepends=True)
+    start = next((i for i, line in enumerate(lines) if SELECT_HEADER.match(line.rstrip("\r\n"))), None)
+    table = render_select(selection)
+    if start is None:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        return text + ("\n" if text else "") + table
+    end = next((i for i in range(start + 1, len(lines)) if TABLE_HEADER.match(lines[i])), len(lines))
+    # Empty lines and comments at the end belong to what comes next, e.g.
+    # "# tmux settings" above [general]. Keep them.
+    keep = end
+    while keep > start + 1 and (not lines[keep - 1].strip() or lines[keep - 1].lstrip().startswith("#")):
+        keep -= 1
+    rest = "".join(lines[keep:])
+    if end < len(lines) and not lines[keep:end]:
+        rest = "\n" + rest  # an empty line before the next table
+    return "".join(lines[:start]) + table + rest
+
+
+def save_selection(path: Path, selection: dict[str, bool]) -> None:
+    """Rewrite [select] in the config file. Write a temporary file, then
+    os.replace: a crash cannot leave a half-written config."""
+    try:
+        text = path.read_text()
+        mode = path.stat().st_mode & 0o777
+    except FileNotFoundError:
+        text, mode = "", 0o644
+    new = rewrite_select(text, selection)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(new)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -661,6 +743,7 @@ def render_overview(
     ended: datetime.datetime,
     stopped: bool,
     colours: bool = False,
+    notes: list[str] | None = None,
 ) -> str:
     def paint(text: str, colour: str) -> str:
         return f"{colour}{text}{RESET}" if colours else text
@@ -694,6 +777,8 @@ def render_overview(
         groups.append(f"Broken: {', '.join(broken)}.")
     if groups:
         out += [" " + " ".join(groups), ""]
+    for note in notes or []:
+        out += [f" {note}", ""]
 
     reboot = [r.step.id for r in results if r.reboot]
     if reboot:
@@ -749,6 +834,152 @@ def end_menu(read, run, exec_fn, shell: str, out_fd: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Selection UI and the text fallback
+# ---------------------------------------------------------------------------
+
+UI_KEYS = " ↑↓/jk move · space toggle · a all · n none · enter save · q cancel"
+
+
+def state_text(step: Step) -> str:
+    return f"broken: {step.detail}" if step.state == BROKEN else step.state
+
+
+class Selection:
+    """Cursor and selection of the UI, without curses."""
+
+    def __init__(self, steps: list[Step], selected: set[str]):
+        self.steps = steps
+        self.selected = {s.id for s in steps if s.id in selected}
+        self.cursor = 0
+
+    @property
+    def current(self) -> Step | None:
+        return self.steps[self.cursor] if self.steps else None
+
+    def move(self, delta: int) -> None:
+        if self.steps:
+            self.cursor = max(0, min(len(self.steps) - 1, self.cursor + delta))
+
+    def toggle(self, index: int | None = None) -> None:
+        index = self.cursor if index is None else index
+        if 0 <= index < len(self.steps):
+            self.selected ^= {self.steps[index].id}
+
+    def select_all(self) -> None:
+        self.selected |= {s.id for s in self.steps if s.state == INSTALLED}
+
+    def select_none(self) -> None:
+        self.selected.clear()
+
+    def lines(self) -> list[str]:
+        id_width = max([14] + [len(s.id) for s in self.steps]) + 2
+        name_width = max([20] + [len(s.title) for s in self.steps]) + 3
+        return [
+            f"[{'x' if s.id in self.selected else ' '}] {s.id:<{id_width}}{s.title:<{name_width}}{state_text(s)}"
+            for s in self.steps
+        ]
+
+    def result(self) -> dict[str, bool]:
+        return {s.id: s.id in self.selected for s in self.steps}
+
+
+def curses_select(selection: Selection, title: str) -> bool:
+    """The checkbox list. True if you saved, False if you cancelled."""
+    os.environ.setdefault("ESCDELAY", "25")  # Esc cancels without a 1 s delay
+
+    def ui(screen) -> bool:
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+        offset = 0
+        while True:
+            height, width = screen.getmaxyx()
+            visible = max(1, height - 5)
+            offset = min(max(offset, selection.cursor - visible + 1), selection.cursor)
+            screen.erase()
+            rows = [(0, f" {title}", curses.A_BOLD)]
+            for i, line in enumerate(selection.lines()[offset : offset + visible]):
+                index = offset + i
+                step = selection.steps[index]
+                attr = curses.A_NORMAL if step.state == INSTALLED else curses.A_DIM
+                if index == selection.cursor:
+                    attr |= curses.A_BOLD
+                rows.append((2 + i, f" {'>' if index == selection.cursor else ' '} {line}", attr))
+            current = selection.current
+            rows.append((height - 2, f"   {current.description if current else ''}", curses.A_NORMAL))
+            rows.append((height - 1, UI_KEYS, curses.A_DIM))
+            for y, text, attr in rows:
+                if 0 <= y < height:
+                    try:
+                        screen.addnstr(y, 0, text, max(1, width - 1), attr)
+                    except curses.error:
+                        pass
+            screen.refresh()
+
+            key = screen.getch()
+            if key in (curses.KEY_UP, ord("k")):
+                selection.move(-1)
+            elif key in (curses.KEY_DOWN, ord("j")):
+                selection.move(1)
+            elif key == ord(" "):
+                selection.toggle()
+            elif key == ord("a"):
+                selection.select_all()
+            elif key == ord("n"):
+                selection.select_none()
+            elif key in (curses.KEY_ENTER, 10, 13):
+                return True
+            elif key in (ord("q"), 27):
+                return False
+            # KEY_RESIZE and other keys: draw again.
+
+    return curses.wrapper(ui)
+
+
+def text_select(selection: Selection, title: str, read_line, out) -> bool:
+    """The numbered list, when curses cannot start or stdin is no terminal."""
+    while True:
+        print(f" {title}\n", file=out)
+        for i, line in enumerate(selection.lines(), 1):
+            print(f" {i:>3} {line}", file=out)
+        print(" Numbers to toggle (e.g. 1 3), a all, n none, empty line saves, q cancels.", file=out)
+        try:
+            answer = read_line().strip()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        if not answer:
+            return True
+        if answer == "q":
+            return False
+        if answer == "a":
+            selection.select_all()
+            continue
+        if answer == "n":
+            selection.select_none()
+            continue
+        for word in answer.replace(",", " ").split():
+            if word.isdigit() and 1 <= int(word) <= len(selection.steps):
+                selection.toggle(int(word) - 1)
+            else:
+                print(f" Not a step number: {word}", file=out)
+
+
+def choose_steps(steps: list[Step], selected: set[str], title: str, stdin_is_tty: bool) -> dict[str, bool] | None:
+    """Show the UI. Returns the selection of all steps, or None if cancelled."""
+    selection = Selection(steps, selected)
+    saved = None
+    if stdin_is_tty:
+        try:
+            saved = curses_select(selection, title)
+        except curses.error:
+            saved = None  # e.g. TERM is unknown. Use the text list.
+    if saved is None:
+        saved = text_select(selection, title, input, sys.stdout)
+    return selection.result() if saved else None
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -776,15 +1007,10 @@ def warn(message: str) -> None:
     print(f"hausmeister: {message}", file=sys.stderr)
 
 
-def update(
-    steps_dirs: list[Path],
-    os_release: Path = OS_RELEASE,
-    ostree_booted: Path = OSTREE_BOOTED,
-    out_fd: int = 1,
-    log_dir: Path | None = None,
-) -> int:
-    """Run all steps that apply. With log_dir, the output of each step also
-    goes to <log_dir>/<step>.log, and the logs of the last run are removed."""
+def discover(
+    steps_dirs: list[Path], os_release: Path = OS_RELEASE, ostree_booted: Path = OSTREE_BOOTED
+) -> tuple[Distro, list[Step], dict[str, str]]:
+    """Detect the distribution, load the steps and find their state."""
     distro = detect_distro(os_release, ostree_booted)
     if distro.id not in KNOWN_DISTROS:
         warn(f"unknown distribution {distro.id!r}. Only the steps that apply run.")
@@ -794,9 +1020,38 @@ def update(
             warn(f"{step.id}: {message}")
     env = base_env(distro)
     evaluate(steps, env)
+    return distro, steps, env
+
+
+def steps_to_run(steps: list[Step], selection: dict[str, bool] | None) -> tuple[list[Step], list[str]]:
+    """The selected steps that apply, and notes for the overview. Without a
+    [select] table, the steps with default = true run."""
+    applies = [s for s in steps if s.state == INSTALLED]
+    if selection is None:
+        note = "No selection saved, so the default steps ran. Run hausmeister update --config to choose."
+        return [s for s in applies if s.default], [note]
+    new = [s.id for s in applies if s.id not in selection]
+    notes = []
+    if new:
+        noun = "step" if len(new) == 1 else "steps"
+        notes.append(f"{len(new)} new {noun}: {', '.join(new)}. Run hausmeister update --config.")
+    return [s for s in applies if selection.get(s.id) is True], notes
+
+
+def update(
+    steps_dirs: list[Path],
+    os_release: Path = OS_RELEASE,
+    ostree_booted: Path = OSTREE_BOOTED,
+    out_fd: int = 1,
+    log_dir: Path | None = None,
+    selection: dict[str, bool] | None = None,
+) -> int:
+    """Run the selected steps that apply. With log_dir, the output of each step
+    also goes to <log_dir>/<step>.log, and the logs of the last run are removed."""
+    distro, steps, env = discover(steps_dirs, os_release, ostree_booted)
 
     started = datetime.datetime.now()
-    to_run = [s for s in steps if s.state == INSTALLED and s.default]
+    to_run, notes = steps_to_run(steps, selection)
     if log_dir:
         log_dir = prepare_log_dir(log_dir)
 
@@ -813,15 +1068,37 @@ def update(
         if keep_alive:
             keep_alive.stop()
     now = datetime.datetime.now()
-    overview = render_overview(distro, steps, results, started, now, stopped, use_colours(out_fd, env))
+    overview = render_overview(distro, steps, results, started, now, stopped, use_colours(out_fd, env), notes)
     write_all(out_fd, ("\n" + overview + "\n").encode())
     return 0 if all(r.status == "ok" for r in results) and not stopped else 1
+
+
+def initial_selection(steps: list[Step], selection: dict[str, bool] | None) -> set[str]:
+    """What the UI shows as selected: the saved selection, or on the first run
+    the steps that apply and have default = true."""
+    if selection is None:
+        return {s.id for s in steps if s.state == INSTALLED and s.default}
+    return {step_id for step_id, value in selection.items() if value}
+
+
+def select_and_save(path: Path, selection: dict[str, bool] | None, title_prefix: str) -> dict[str, bool] | None:
+    """Show the selection UI and save the result. None if cancelled."""
+    distro, steps, _ = discover([STEPS_DIR, user_steps_dir()])
+    chosen = choose_steps(steps, initial_selection(steps, selection), f"{title_prefix} · {distro.name}", os.isatty(0))
+    if chosen is None:
+        return None
+    # Keep the entries of steps that are not here now, e.g. an own folder you moved away.
+    merged = chosen | {k: v for k, v in (selection or {}).items() if k not in chosen}
+    save_selection(path, merged)
+    print(f"Saved the selection in {short_path(path)}.")
+    return merged
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="hausmeister", description="Update the system and your tools.")
     commands = parser.add_subparsers(dest="command")
-    commands.add_parser("update", help="run all steps that apply, then show an overview")
+    update_parser = commands.add_parser("update", help="run all selected steps that apply, then show an overview")
+    update_parser.add_argument("--config", action="store_true", help="choose the steps, save them and stop")
     args = parser.parse_args(argv)
 
     if args.command != "update":
@@ -831,9 +1108,18 @@ def main(argv: list[str] | None = None) -> int:
         warn("do not run hausmeister as root. Steps that need root use sudo.")
         return 2
 
-    config, message = read_config(config_path())
+    path = config_path()
+    config, message = read_config(path)
     if message:
         warn(message)
+    selection, messages = read_selection(config)
+    for message in messages:
+        warn(message)
+    if args.config:
+        if select_and_save(path, selection, "hausmeister · select steps") is None:
+            print("Nothing saved.")
+        return 0
+
     use_tmux, message = general_setting(config, "tmux")
     if message:
         warn(message)
@@ -841,7 +1127,14 @@ def main(argv: list[str] | None = None) -> int:
     if note:
         warn(note)
 
-    code = update([STEPS_DIR, user_steps_dir()], log_dir=log_dir_path())
+    code = 0
+    if selection is None and os.isatty(0):
+        # The first run: choose the steps before the first update.
+        selection = select_and_save(path, None, "hausmeister · first run · select steps")
+        if selection is None:
+            print("Nothing saved, nothing updated. Run hausmeister update again to choose the steps.")
+    if selection is not None or not os.isatty(0):
+        code = update([STEPS_DIR, user_steps_dir()], log_dir=log_dir_path(), selection=selection)
     if os.isatty(0):
         end_menu(
             lambda: read_key(0),

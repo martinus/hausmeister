@@ -308,7 +308,7 @@ Without a terminal, hausmeister ends at once. The exit code is 1 if a step faile
 - Keys: `↑` `↓` or `j` `k` to move, `Space` to toggle, `a` to select all steps that apply, `n` to select none, `Enter` to save, `q` or `Esc` to cancel.
 - Use `curses.wrapper`, so the terminal is always restored, also after an error. Handle `KEY_RESIZE`. If the terminal has no colours, show the state as text only.
 - Fallback: if `curses` cannot start, or stdin is not a terminal, show a numbered list. You type numbers to toggle and an empty line to save.
-- First run: if no config exists and stdin is a terminal, open the UI before the first update. The steps that apply and have `default = true` are selected.
+- First run: if the config has no `[select]` table and stdin is a terminal, open the UI before the first update. The steps that apply and have `default = true` are selected. Without a terminal, the steps that apply and have `default = true` run, and the overview says that no selection is saved.
 
 ### The config file
 
@@ -330,7 +330,8 @@ fwupd = true
 - Location: `$XDG_CONFIG_HOME/hausmeister/config.toml`. If `$XDG_CONFIG_HOME` is not set, use `~/.config`.
 - Read with `tomllib`.
 - `[select]` has one line per step: the step id and `true` or `false`.
-- `update --config` rewrites only the text of the `[select]` table: from the `[select]` line to the next table header or the end of the file. All other lines, with your comments, stay byte for byte. If the table is missing, add it at the end.
+- `update --config` rewrites only the text of the `[select]` table: from the `[select]` line to the next table header or the end of the file. Empty lines and comments at the end of that part belong to the next table and stay. All other lines, with your comments, stay byte for byte. If the table is missing, add it at the end.
+- An entry for a step that is not there now, e.g. an own folder that you moved away, stays in `[select]`.
 - Write to a temporary file, then `os.replace`. A crash cannot leave a half-written config.
 - A step that is not in `[select]` is new, for example from a new release or a new folder of yours. It does not run until you select it.
 
