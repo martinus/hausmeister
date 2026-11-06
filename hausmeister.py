@@ -27,6 +27,7 @@ import termios
 import threading
 import time
 import tomllib
+import tty
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -202,6 +203,58 @@ def missing_needs(needs: str, path: str | None) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# tmux re-exec
+# ---------------------------------------------------------------------------
+
+SCRIPT = Path(__file__).resolve()
+TMUX_SESSION = "hausmeister"
+
+
+def start_tmux(env: dict[str, str], use_tmux: bool, stdin_is_tty: bool, exec_fn) -> str:
+    """Replace this process with tmux: attach to a running hausmeister session,
+    or start a new one that runs `hausmeister update`. Returns only if the run
+    stays in the current terminal, with a note why (empty if already in tmux)."""
+    if env.get("TMUX"):
+        return ""
+    if not use_tmux:
+        return "tmux = false in the config, running in this terminal."
+    if not stdin_is_tty:
+        return "stdin is not a terminal, running without tmux."
+    tmux = shutil.which("tmux", path=env.get("PATH"))
+    if not tmux:
+        return "tmux is not installed, running in this terminal."
+    has_session = subprocess.run(
+        [tmux, "has-session", "-t", f"={TMUX_SESSION}"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if has_session.returncode == 0:
+        # A run is already in progress. Show it instead of starting a second one.
+        exec_fn(tmux, [tmux, "attach-session", "-t", f"={TMUX_SESSION}"])
+    else:
+        # A running tmux server gives a new session its own environment, not the
+        # one of this shell. -e PATH keeps tools in ~/.cargo/bin and ~/.local/bin.
+        exec_fn(
+            tmux,
+            [
+                tmux,
+                "new-session",
+                "-s",
+                TMUX_SESSION,
+                "-e",
+                f"PATH={env.get('PATH', '')}",
+                "-e",
+                "HAUSMEISTER_UPDATED=1",
+                sys.executable,
+                str(SCRIPT),
+                "update",
+            ],
+        )
+    return "could not start tmux, running in this terminal."
+
+
+# ---------------------------------------------------------------------------
 # sudo cache
 # ---------------------------------------------------------------------------
 
@@ -250,6 +303,39 @@ class SudoKeepAlive:
         self._stop.set()
         if self._thread.is_alive():
             self._thread.join(timeout=15)
+
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+GENERAL_DEFAULTS = {"tmux": True, "self_update": True}
+
+
+def config_path() -> Path:
+    config = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(config) / "hausmeister" / "config.toml"
+
+
+def read_config(path: Path) -> tuple[dict, str]:
+    """Returns the config and a warning. A missing file is an empty config."""
+    try:
+        with path.open("rb") as f:
+            return tomllib.load(f), ""
+    except FileNotFoundError:
+        return {}, ""
+    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
+        return {}, f"{path}: {e}. Using the defaults."
+
+
+def general_setting(config: dict, key: str) -> tuple[bool, str]:
+    """Returns a [general] setting and a warning."""
+    default = GENERAL_DEFAULTS[key]
+    general = config.get("general", {})
+    value = general.get(key, default) if isinstance(general, dict) else default
+    if type(value) is not bool:
+        return default, f"config: {key} must be true or false. Using {str(default).lower()}."
+    return value, ""
 
 
 # ---------------------------------------------------------------------------
@@ -548,6 +634,42 @@ def render_overview(
     return "\n".join(out)
 
 
+REBOOT = ["systemctl", "reboot"]
+POWER_OFF = ["systemctl", "poweroff"]
+MENU = " [r] reboot · [p] power off · [s] shell · [q] quit"
+QUIT_KEYS = ("q", "Q", "\r", "\n", "", "\x03", "\x04", "\x1b")
+
+
+def read_key(fd: int) -> str:
+    """Read one key without Enter. Returns "" at the end of the input."""
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        return os.read(fd, 1).decode(errors="replace")
+    except (OSError, KeyboardInterrupt):
+        return ""
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def end_menu(read, run, exec_fn, shell: str, out_fd: int) -> None:
+    """The menu after the overview. read() returns a key, run(argv) an exit
+    code, exec_fn(file, argv) replaces the process with the shell."""
+    write_all(out_fd, (MENU + "\n").encode())
+    while True:
+        key = read()
+        if key in ("r", "p"):
+            command = REBOOT if key == "r" else POWER_OFF
+            if run(command) == 0:
+                return
+            write_all(out_fd, f" {' '.join(command)} failed.\n{MENU}\n".encode())
+        elif key == "s":
+            exec_fn(shell, [shell])
+            return
+        elif key in QUIT_KEYS:
+            return
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -605,7 +727,27 @@ def main(argv: list[str] | None = None) -> int:
     if os.geteuid() == 0:
         warn("do not run hausmeister as root. Steps that need root use sudo.")
         return 2
-    return update([STEPS_DIR, user_steps_dir()])
+
+    config, message = read_config(config_path())
+    if message:
+        warn(message)
+    use_tmux, message = general_setting(config, "tmux")
+    if message:
+        warn(message)
+    note = start_tmux(dict(os.environ), use_tmux, os.isatty(0), os.execv)
+    if note:
+        warn(note)
+
+    code = update([STEPS_DIR, user_steps_dir()])
+    if os.isatty(0):
+        end_menu(
+            lambda: read_key(0),
+            lambda command: subprocess.run(command).returncode,
+            os.execvp,
+            os.environ.get("SHELL") or "/bin/sh",
+            1,
+        )
+    return code
 
 
 if __name__ == "__main__":

@@ -199,7 +199,7 @@ The overview shows the change, for example "self: v0.3.0 → v0.4.0". If the new
 1. If `$TMUX` is set, you are already in tmux. Continue in the current pane. The re-exec in item 3 uses this check too, so it needs no extra option.
 2. If a session with the name `hausmeister` exists, attach to it (`tmux attach -t hausmeister`). A run is already in progress, so do not start a second one.
 3. Otherwise replace the process with `os.execvp`: `tmux new-session -s hausmeister -e PATH=$PATH -e HAUSMEISTER_UPDATED=1 <python> <hausmeister.py> update`. The second `-e` prevents a second self-update check inside tmux.
-4. If tmux is not installed, or `tmux = false` is in the config, run in the current terminal and show a short note.
+4. If tmux is not installed, or `tmux = false` is in the config, or stdin is not a terminal (tmux needs one), run in the current terminal and show a short note.
 
 Why `-e PATH=$PATH`: if a tmux server is already running, the new session gets the environment of the server, not of your shell. Then tools in `~/.cargo/bin` or `~/.local/bin` can be missing, and their steps show as "not installed".
 
