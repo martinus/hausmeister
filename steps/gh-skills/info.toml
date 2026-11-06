@@ -1,0 +1,4 @@
+name = "gh skills"
+description = "Runs gh skill update --all"
+needs = "gh"
+order = 50

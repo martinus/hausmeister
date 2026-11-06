@@ -189,7 +189,7 @@ class MainTest(unittest.TestCase):
         tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
         if config_text is not None:
             write(tmp / "hausmeister" / "config.toml", config_text)
-        self.enterContext(mock.patch.dict(os.environ, XDG_CONFIG_HOME=str(tmp)))
+        self.enterContext(mock.patch.dict(os.environ, XDG_CONFIG_HOME=str(tmp), XDG_STATE_HOME=str(tmp / "state")))
         self.enterContext(mock.patch.object(hm.os, "geteuid", return_value=1000))
         self.enterContext(mock.patch.object(hm.os, "isatty", return_value=stdin_is_tty))
         self.enterContext(mock.patch("sys.stderr", new=self.enterContext(tempfile.TemporaryFile(mode="w+"))))
@@ -198,6 +198,7 @@ class MainTest(unittest.TestCase):
         end_menu = self.enterContext(mock.patch.object(hm, "end_menu"))
         self.assertEqual(hm.main(["update"]), 1)
         update.assert_called_once()
+        self.assertEqual(update.call_args.kwargs["log_dir"], tmp / "state" / "hausmeister" / "last-run")
         return start_tmux, end_menu
 
     def test_tmux_false_in_config(self):

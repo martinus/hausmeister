@@ -1,0 +1,4 @@
+name = "micro plugins"
+description = "Runs micro -plugin update"
+needs = "micro"
+order = 60

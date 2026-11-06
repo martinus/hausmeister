@@ -1,0 +1,4 @@
+name = "npm global packages"
+description = "Runs npm update -g"
+needs = "npm"
+order = 50

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Only when you added a remote with --user.
+[ -n "$(flatpak remotes --user --columns=name 2>/dev/null)" ]

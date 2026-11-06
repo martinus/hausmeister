@@ -1,0 +1,5 @@
+name = "Snap packages"
+description = "Runs snap refresh"
+needs = "snap"
+sudo = true
+order = 20

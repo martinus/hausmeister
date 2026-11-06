@@ -345,6 +345,9 @@ def general_setting(config: dict, key: str) -> tuple[bool, str]:
 CHECK_TIMEOUT = 5.0
 TAIL_BYTES = 64 * 1024
 TAIL_LINES = 5
+KEEP_LINES = 40
+IMPORTANT_LINE = re.compile(r"error|failed|^E:", re.IGNORECASE)
+SUDO_EXPIRED = "sudo: a password is required"
 SECOND_CTRL_C = 2.0
 
 
@@ -414,6 +417,7 @@ class Result:
     reboot: bool = False
     tail: list[str] = dataclasses.field(default_factory=list)
     ran: bool = True
+    log: Path | None = None
 
 
 def write_all(fd: int, data: bytes) -> None:
@@ -432,9 +436,11 @@ def copy_window_size(src_fd: int, dst_fd: int) -> None:
         pass
 
 
-def spawn_update(argv: list[str], env: dict[str, str], cwd: Path, out_fd: int) -> tuple[int, bytes, list[float]]:
+def spawn_update(
+    argv: list[str], env: dict[str, str], cwd: Path, out_fd: int, log=None
+) -> tuple[int, bytes, list[float]]:
     """Run argv with stdout and stderr on a new pseudo-terminal, and copy its
-    output to out_fd. Returns the exit code, the end of the output and the times
+    output to out_fd and to the binary file log. Returns the exit code, the end of the output and the times
     of Ctrl-C presses.
 
     stdin and the controlling terminal stay the ones of hausmeister. sudo caches
@@ -451,6 +457,8 @@ def spawn_update(argv: list[str], env: dict[str, str], cwd: Path, out_fd: int) -
         os.close(slave)
         message = f"hausmeister: cannot run {argv[0]}: {e.strerror}\n".encode()
         write_all(out_fd, message)
+        if log:
+            log.write(message)
         return (127 if e.errno == errno.ENOENT else 126), message, []
     os.close(slave)
 
@@ -468,6 +476,11 @@ def spawn_update(argv: list[str], env: dict[str, str], cwd: Path, out_fd: int) -
                     if not data:
                         break
                     write_all(out_fd, data)
+                    if log:
+                        try:
+                            log.write(data)
+                        except OSError:
+                            pass  # e.g. a full disk. The step goes on.
                     tail = (tail + data)[-TAIL_BYTES:]
                 elif proc.poll() is not None:
                     # The step ended and nothing came for 0.2 s. A background
@@ -489,7 +502,7 @@ def spawn_update(argv: list[str], env: dict[str, str], cwd: Path, out_fd: int) -
 ANSI_ESCAPE = re.compile(rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07")
 
 
-def last_lines(output: bytes, count: int = TAIL_LINES) -> list[str]:
+def last_lines(output: bytes, count: int = KEEP_LINES) -> list[str]:
     text = ANSI_ESCAPE.sub(b"", output).decode(errors="replace")
     lines = []
     for line in text.split("\n"):
@@ -507,13 +520,36 @@ def first_line(path: Path) -> str:
         return ""
 
 
+def important_lines(lines: list[str], count: int = TAIL_LINES) -> list[str]:
+    """The lines with error, failed or E: first, else the last lines."""
+    important = [line for line in lines if IMPORTANT_LINE.search(line)]
+    return (important or lines)[-count:]
+
+
+def core_reason(exit_code: int, output: bytes, cancelled: bool) -> str:
+    """The reason from the rules for all steps, when the step gave none."""
+    if cancelled:
+        return "cancelled"
+    if SUDO_EXPIRED.encode() in output:
+        return "The sudo cache expired, sudo asked for the password again."
+    if exit_code == 127:
+        return "command not found"
+    if exit_code == 126:
+        return "not executable"
+    if exit_code < 0:
+        return f"killed by signal {-exit_code}"
+    return ""
+
+
 def describe_exit(exit_code: int) -> str:
     if exit_code < 0:
         return f"killed by signal {-exit_code}"
     return f"exit code {exit_code}"
 
 
-def run_step(step: Step, env: dict[str, str], version_id: str, os_release: Path, out_fd: int) -> tuple[Result, bool]:
+def run_step(
+    step: Step, env: dict[str, str], version_id: str, os_release: Path, out_fd: int, log_dir: Path | None = None
+) -> tuple[Result, bool]:
     """Run one update. Returns the result and True if the user wants to stop the run."""
     clock = datetime.datetime.now().strftime("%H:%M:%S")
     write_all(out_fd, f"\n── {clock} · {step.id} · {step.title} ──\n".encode())
@@ -526,8 +562,19 @@ def run_step(step: Step, env: dict[str, str], version_id: str, os_release: Path,
             HAUSMEISTER_NOTE=str(files / "note"),
             HAUSMEISTER_REBOOT=str(files / "reboot"),
         )
+        log_path = log_dir / f"{step.id}.log" if log_dir else None
+        log = None
+        if log_path:
+            try:
+                log = log_path.open("wb")
+            except OSError:
+                log_path = None
         start = time.monotonic()
-        exit_code, output, interrupts = spawn_update([str(step.update)], step_env, Path.home(), out_fd)
+        try:
+            exit_code, output, interrupts = spawn_update([str(step.update)], step_env, Path.home(), out_fd, log)
+        finally:
+            if log:
+                log.close()
         result = Result(
             step=step,
             status="ok" if exit_code == 0 else "FAILED",
@@ -537,9 +584,13 @@ def run_step(step: Step, env: dict[str, str], version_id: str, os_release: Path,
             note=first_line(files / "note"),
             reboot=(files / "reboot").exists(),
             tail=last_lines(output),
+            log=log_path,
         )
-    if interrupts and exit_code != 0:
-        result.status, result.reason = "cancelled", "cancelled"
+    cancelled = bool(interrupts) and exit_code != 0
+    if cancelled:
+        result.status = "cancelled"
+    if result.status != "ok" and not result.reason:
+        result.reason = core_reason(exit_code, output, cancelled)
     new_version_id = read_os_release(os_release).get("VERSION_ID", "")
     if new_version_id != version_id:
         result.status = "FAILED"
@@ -549,7 +600,12 @@ def run_step(step: Step, env: dict[str, str], version_id: str, os_release: Path,
 
 
 def run_steps(
-    steps: list[Step], env: dict[str, str], os_release: Path, out_fd: int, have_sudo: bool = True
+    steps: list[Step],
+    env: dict[str, str],
+    os_release: Path,
+    out_fd: int,
+    have_sudo: bool = True,
+    log_dir: Path | None = None,
 ) -> tuple[list[Result], bool]:
     """Run the steps in sequence. A failure does not stop the run, two Ctrl-C
     within 2 seconds do. Without have_sudo, the steps with sudo = true fail
@@ -561,7 +617,7 @@ def run_steps(
             continue
         # Read it before each step, so that only the step that changed it fails.
         version_id = read_os_release(os_release).get("VERSION_ID", "")
-        result, stop = run_step(step, env, version_id, os_release, out_fd)
+        result, stop = run_step(step, env, version_id, os_release, out_fd, log_dir)
         results.append(result)
         if stop:
             return results, True
@@ -582,6 +638,21 @@ def format_duration(seconds: float) -> str:
     return f"{minutes} min {secs:02d} s"
 
 
+GREEN, RED, RESET = "\x1b[32m", "\x1b[31m", "\x1b[0m"
+
+
+def use_colours(fd: int, env: dict[str, str]) -> bool:
+    return os.isatty(fd) and env.get("TERM", "dumb") != "dumb" and "NO_COLOR" not in env
+
+
+def short_path(path: Path) -> str:
+    """~/.local/state/... instead of /home/me/.local/state/..."""
+    try:
+        return "~/" + str(path.relative_to(Path.home()))
+    except ValueError:
+        return str(path)
+
+
 def render_overview(
     distro: Distro,
     steps: list[Step],
@@ -589,7 +660,11 @@ def render_overview(
     started: datetime.datetime,
     ended: datetime.datetime,
     stopped: bool,
+    colours: bool = False,
 ) -> str:
+    def paint(text: str, colour: str) -> str:
+        return f"{colour}{text}{RESET}" if colours else text
+
     total = (ended - started).total_seconds()
     out = [
         f" hausmeister update · {distro.name} · {started:%H:%M} to {ended:%H:%M} · {format_duration(total)}",
@@ -601,7 +676,8 @@ def render_overview(
         text_width = max(len(r.note or r.step.title) for r in results) + 3
         for r in results:
             text = r.note or r.step.title
-            out.append(f" {r.status:<10}{r.step.id:<{id_width}}{text:<{text_width}}{format_duration(r.duration)}")
+            status = paint(f"{r.status:<10}", GREEN if r.status == "ok" else RED)
+            out.append(f" {status}{r.step.id:<{id_width}}{text:<{text_width}}{format_duration(r.duration)}")
     else:
         out.append(" No step applies on this machine.")
     if stopped:
@@ -626,10 +702,12 @@ def render_overview(
     for r in results:
         if r.status == "ok":
             continue
-        out.append(f" ✘ {r.step.id} · {describe_exit(r.exit_code) if r.ran else 'not run'}")
+        out.append(paint(f" ✘ {r.step.id} · {describe_exit(r.exit_code) if r.ran else 'not run'}", RED))
         if r.reason:
             out.append(f"   Reason: {r.reason}")
-        out += [f"   > {line}" for line in r.tail]
+        out += [f"   > {line}" for line in important_lines(r.tail)]
+        if r.log:
+            out.append(f"   Full log: {short_path(r.log)}")
         out.append("")
     return "\n".join(out)
 
@@ -675,6 +753,25 @@ def end_menu(read, run, exec_fn, shell: str, out_fd: int) -> None:
 # ---------------------------------------------------------------------------
 
 
+def log_dir_path() -> Path:
+    state = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(state) / "hausmeister" / "last-run"
+
+
+def prepare_log_dir(log_dir: Path) -> Path | None:
+    """Create the log folder and remove the logs of the last run. Only *.log
+    files, nothing else in the folder. Returns None if it cannot be used."""
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        for old in log_dir.glob("*.log"):
+            if old.is_file():
+                old.unlink()
+    except OSError as e:
+        warn(f"cannot use {log_dir}: {e.strerror}. Running without step logs.")
+        return None
+    return log_dir
+
+
 def warn(message: str) -> None:
     print(f"hausmeister: {message}", file=sys.stderr)
 
@@ -684,7 +781,10 @@ def update(
     os_release: Path = OS_RELEASE,
     ostree_booted: Path = OSTREE_BOOTED,
     out_fd: int = 1,
+    log_dir: Path | None = None,
 ) -> int:
+    """Run all steps that apply. With log_dir, the output of each step also
+    goes to <log_dir>/<step>.log, and the logs of the last run are removed."""
     distro = detect_distro(os_release, ostree_booted)
     if distro.id not in KNOWN_DISTROS:
         warn(f"unknown distribution {distro.id!r}. Only the steps that apply run.")
@@ -697,6 +797,8 @@ def update(
 
     started = datetime.datetime.now()
     to_run = [s for s in steps if s.state == INSTALLED and s.default]
+    if log_dir:
+        log_dir = prepare_log_dir(log_dir)
 
     keep_alive = None
     have_sudo = True
@@ -706,11 +808,12 @@ def update(
             keep_alive = SudoKeepAlive()
             keep_alive.start()
     try:
-        results, stopped = run_steps(to_run, env, os_release, out_fd, have_sudo)
+        results, stopped = run_steps(to_run, env, os_release, out_fd, have_sudo, log_dir)
     finally:
         if keep_alive:
             keep_alive.stop()
-    overview = render_overview(distro, steps, results, started, datetime.datetime.now(), stopped)
+    now = datetime.datetime.now()
+    overview = render_overview(distro, steps, results, started, now, stopped, use_colours(out_fd, env))
     write_all(out_fd, ("\n" + overview + "\n").encode())
     return 0 if all(r.status == "ok" for r in results) and not stopped else 1
 
@@ -738,7 +841,7 @@ def main(argv: list[str] | None = None) -> int:
     if note:
         warn(note)
 
-    code = update([STEPS_DIR, user_steps_dir()])
+    code = update([STEPS_DIR, user_steps_dir()], log_dir=log_dir_path())
     if os.isatty(0):
         end_menu(
             lambda: read_key(0),

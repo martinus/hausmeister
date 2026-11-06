@@ -1,0 +1,5 @@
+name = "Flatpak apps (system)"
+description = "Runs flatpak update --system"
+needs = "flatpak"
+sudo = true
+order = 30
