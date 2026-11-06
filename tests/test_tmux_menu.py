@@ -196,6 +196,7 @@ class MainTest(unittest.TestCase):
         start_tmux = self.enterContext(mock.patch.object(hm, "start_tmux", return_value=""))
         update = self.enterContext(mock.patch.object(hm, "update", return_value=1))
         end_menu = self.enterContext(mock.patch.object(hm, "end_menu"))
+        self.select_and_save = self.enterContext(mock.patch.object(hm, "select_and_save", return_value={}))
         self.assertEqual(hm.main(["update"]), 1)
         update.assert_called_once()
         self.assertEqual(update.call_args.kwargs["log_dir"], tmp / "state" / "hausmeister" / "last-run")
