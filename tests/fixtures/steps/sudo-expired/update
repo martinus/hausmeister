@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# What sudo -n prints when the cache expired. The real sudo does not run.
+echo "sudo: a password is required" >&2
+exit 1

@@ -1,0 +1,4 @@
+name = "Rust toolchains"
+description = "Runs rustup update"
+needs = "rustup"
+order = 40

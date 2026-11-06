@@ -1,0 +1,4 @@
+name = "Distrobox containers"
+description = "Runs distrobox upgrade --all"
+needs = "distrobox"
+order = 60

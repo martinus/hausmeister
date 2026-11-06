@@ -1,0 +1,4 @@
+name = "tldr pages"
+description = "Runs tldr --update"
+needs = "tldr"
+order = 70

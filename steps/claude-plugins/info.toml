@@ -1,0 +1,4 @@
+name = "Claude Code plugins"
+description = "Runs claude plugin marketplace update"
+needs = "claude"
+order = 55

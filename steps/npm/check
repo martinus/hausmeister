@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Only when the global folder belongs to you. A system-wide folder needs root,
+# and npm should not run as root.
+prefix=$(npm prefix -g 2>/dev/null) || exit 1
+[ -w "$prefix/lib/node_modules" ] || [ -w "$prefix/lib" ] || exit 1

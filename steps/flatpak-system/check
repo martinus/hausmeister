@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+[ -n "$(flatpak remotes --system --columns=name 2>/dev/null)" ]

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# gh extension upgrade --all fails when no extension is installed.
+[ -n "$(gh extension list 2>/dev/null)" ]

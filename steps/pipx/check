@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Only when pipx has at least one app.
+[ -n "$(pipx list --short 2>/dev/null)" ]

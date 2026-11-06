@@ -1,0 +1,4 @@
+name = "pipx apps"
+description = "Runs pipx upgrade-all --include-injected"
+needs = "pipx"
+order = 50

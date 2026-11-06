@@ -133,7 +133,9 @@ class LastLinesTest(unittest.TestCase):
 
     def test_only_the_last_lines(self):
         output = "".join(f"line {i}\r\n" for i in range(10)).encode()
-        self.assertEqual(hm.last_lines(output), [f"line {i}" for i in range(5, 10)])
+        self.assertEqual(hm.last_lines(output, 5), [f"line {i}" for i in range(5, 10)])
+        many = "".join(f"line {i}\r\n" for i in range(100)).encode()
+        self.assertEqual(len(hm.last_lines(many)), 40)
 
 
 class OverviewTest(unittest.TestCase):

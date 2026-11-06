@@ -133,12 +133,12 @@ Version 1 ships 19 step folders. The `self` step is not a folder: it is part of 
 | `fwupd` | `fwupdmgr` | always | `$SUDO fwupdmgr refresh --force`, then `fwupdmgr get-updates`. Only reports, installs nothing. | yes | 30 |
 | `rustup` | `rustup` | always | `rustup update` | no | 40 |
 | `cargo` | `cargo cargo-install-update` | always | `cargo install-update -a --git` | no | 45 |
-| `pipx` | `pipx` | always | `pipx upgrade-all --include-injected` | no | 50 |
+| `pipx` | `pipx` | `pipx list --short` is not empty | `pipx upgrade-all --include-injected` | no | 50 |
 | `uv` | `uv` | always | `uv tool upgrade --all` | no | 50 |
 | `npm` | `npm` | the global npm folder is writable | `npm update -g` | no | 50 |
 | `claude` | `claude` | always | `claude update` | no | 50 |
 | `claude-plugins` | `claude` | always | `claude plugin marketplace update` | no | 55 |
-| `gh-extensions` | `gh` | always | `gh extension upgrade --all` | no | 50 |
+| `gh-extensions` | `gh` | `gh extension list` is not empty | `gh extension upgrade --all` | no | 50 |
 | `gh-skills` | `gh` | `gh skill --help` works (newer gh only) | `gh skill update --all` | no | 50 |
 | `micro` | `micro` | always | `micro -plugin update` | no | 60 |
 | `distrobox` | `distrobox` | always | `distrobox upgrade --all` | no | 60 |
