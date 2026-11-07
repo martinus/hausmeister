@@ -186,7 +186,7 @@ The restart is possible because Python reads and compiles `hausmeister.py` at st
 1. If `self_update = false` is in the config, or `HAUSMEISTER_UPDATED=1` is in the environment, skip this part.
 2. Find the repository: the folder of `Path(__file__).resolve()`. `resolve()` follows the symlink in `~/.local/bin`.
 3. If `git status --porcelain` shows local changes, skip with a note. The self-update must never remove your changes. Your own steps belong in `~/.config/hausmeister/steps/`.
-4. If HEAD is not exactly at a `v*` tag (`git describe --tags --exact-match HEAD`), skip with the note "development checkout". Thus you can develop on a branch in the same clone.
+4. If HEAD is on a branch (`git symbolic-ref -q HEAD`), or not exactly at a `v*` tag (`git describe --tags --exact-match HEAD`), skip with the note "development checkout". Thus you can develop on a branch in the same clone, also when the branch is at a tagged commit.
 5. Run `git fetch --tags --quiet origin` with a timeout of 30 seconds. If there is no network, continue with the current version.
 6. Find the newest tag: the first line of `git tag --list 'v*' --sort=-v:refname`. If it is the current tag, continue with part 2.
 7. Run `git checkout --quiet --detach <tag>`.

@@ -204,11 +204,119 @@ def missing_needs(needs: str, path: str | None) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# tmux re-exec
+# Self-update with git
 # ---------------------------------------------------------------------------
 
 SCRIPT = Path(__file__).resolve()
+FETCH_TIMEOUT = 30.0
+GIT_TIMEOUT = 10.0
+
+
+@dataclasses.dataclass
+class SelfUpdate:
+    status: str  # "ok", "skipped" or "FAILED"
+    text: str
+    duration: float = 0.0
+
+    def encode(self) -> str:
+        """For HAUSMEISTER_SELF, so that the restarted process can show it."""
+        return f"{self.status}\t{self.text}\t{self.duration:.3f}"
+
+    @staticmethod
+    def decode(value: str) -> "SelfUpdate | None":
+        parts = value.split("\t")
+        if len(parts) != 3 or parts[0] not in ("ok", "skipped", "FAILED"):
+            return None
+        try:
+            return SelfUpdate(parts[0], parts[1], float(parts[2]))
+        except ValueError:
+            return None
+
+
+def git(repo: Path, *args: str, timeout: float = GIT_TIMEOUT) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def first_error(proc: subprocess.CompletedProcess) -> str:
+    lines = (proc.stderr or proc.stdout or "").strip().splitlines()
+    return lines[0] if lines else f"exit code {proc.returncode}"
+
+
+def self_update(script: Path, argv: list[str], exec_fn) -> SelfUpdate:
+    """Update the clone of hausmeister to the newest v* tag and restart with
+    exec_fn(file, argv). Returns only if there is no restart."""
+    start = time.monotonic()
+    repo = script.parent
+
+    def result(status: str, text: str) -> SelfUpdate:
+        return SelfUpdate(status, text, time.monotonic() - start)
+
+    try:
+        status = git(repo, "status", "--porcelain")
+        if status.returncode != 0:
+            return result("skipped", f"not a git clone: {first_error(status)}")
+        if status.stdout.strip():
+            return result("skipped", "local changes in the clone. Own steps belong in ~/.config/hausmeister/steps/")
+        # On a branch, also at a tagged commit, or not exactly at a v* tag: you develop here.
+        on_branch = git(repo, "symbolic-ref", "-q", "HEAD").returncode == 0
+        describe = git(repo, "describe", "--tags", "--exact-match", "--match", "v*", "HEAD")
+        if on_branch or describe.returncode != 0:
+            return result("skipped", "development checkout")
+        current = describe.stdout.strip()
+
+        try:
+            fetch = git(repo, "fetch", "--tags", "--quiet", "origin", timeout=FETCH_TIMEOUT)
+            fetched = fetch.returncode == 0
+        except subprocess.TimeoutExpired:
+            fetched = False
+        if not fetched:
+            return result("skipped", f"{current}, git fetch failed (no network?)")
+
+        tags = git(repo, "tag", "--list", "v*", "--sort=-v:refname").stdout.split()
+        newest = tags[0] if tags else current
+        if newest == current:
+            return result("ok", f"{current}, the newest")
+
+        checkout = git(repo, "checkout", "--quiet", "--detach", newest)
+        if checkout.returncode != 0:
+            return result("FAILED", f"git checkout {newest}: {first_error(checkout)}")
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return result("FAILED", f"git: {e}")
+
+    done = result("ok", f"{current} → {newest}")
+    os.environ["HAUSMEISTER_UPDATED"] = "1"  # the new process does not update again
+    os.environ["HAUSMEISTER_SELF"] = done.encode()
+    exec_fn(sys.executable, [sys.executable, str(script), *argv])
+    return result("FAILED", f"could not restart after the update to {newest}")
+
+
+# ---------------------------------------------------------------------------
+# tmux re-exec
+# ---------------------------------------------------------------------------
 TMUX_SESSION = "hausmeister"
+
+
+def tmux_session_running(env: dict[str, str]) -> bool:
+    tmux = shutil.which("tmux", path=env.get("PATH"))
+    if not tmux:
+        return False
+    try:
+        proc = subprocess.run(
+            [tmux, "has-session", "-t", f"={TMUX_SESSION}"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=GIT_TIMEOUT,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0
 
 
 def start_tmux(env: dict[str, str], use_tmux: bool, stdin_is_tty: bool, exec_fn) -> str:
@@ -247,6 +355,7 @@ def start_tmux(env: dict[str, str], use_tmux: bool, stdin_is_tty: bool, exec_fn)
                 f"PATH={env.get('PATH', '')}",
                 "-e",
                 "HAUSMEISTER_UPDATED=1",
+                *(["-e", f"HAUSMEISTER_SELF={env['HAUSMEISTER_SELF']}"] if env.get("HAUSMEISTER_SELF") else []),
                 sys.executable,
                 str(SCRIPT),
                 "update",
@@ -759,7 +868,8 @@ def render_overview(
         text_width = max(len(r.note or r.step.title) for r in results) + 3
         for r in results:
             text = r.note or r.step.title
-            status = paint(f"{r.status:<10}", GREEN if r.status == "ok" else RED)
+            colour = {"ok": GREEN, "skipped": ""}.get(r.status, RED)
+            status = paint(f"{r.status:<10}", colour) if colour else f"{r.status:<10}"
             out.append(f" {status}{r.step.id:<{id_width}}{text:<{text_width}}{format_duration(r.duration)}")
     else:
         out.append(" No step applies on this machine.")
@@ -785,7 +895,7 @@ def render_overview(
         out += [f" Reboot needed ({', '.join(reboot)}).", ""]
 
     for r in results:
-        if r.status == "ok":
+        if r.status in ("ok", "skipped"):
             continue
         out.append(paint(f" ✘ {r.step.id} · {describe_exit(r.exit_code) if r.ran else 'not run'}", RED))
         if r.reason:
@@ -1045,6 +1155,7 @@ def update(
     out_fd: int = 1,
     log_dir: Path | None = None,
     selection: dict[str, bool] | None = None,
+    self_result: SelfUpdate | None = None,
 ) -> int:
     """Run the selected steps that apply. With log_dir, the output of each step
     also goes to <log_dir>/<step>.log, and the logs of the last run are removed."""
@@ -1067,10 +1178,14 @@ def update(
     finally:
         if keep_alive:
             keep_alive.stop()
+    if self_result:
+        self_step = Step(id="self", path=SCRIPT.parent, name="hausmeister")
+        reason = self_result.text if self_result.status == "FAILED" else ""
+        results.insert(0, Result(self_step, self_result.status, 0, self_result.duration, reason, self_result.text))
     now = datetime.datetime.now()
     overview = render_overview(distro, steps, results, started, now, stopped, use_colours(out_fd, env), notes)
     write_all(out_fd, ("\n" + overview + "\n").encode())
-    return 0 if all(r.status == "ok" for r in results) and not stopped else 1
+    return 0 if all(r.status in ("ok", "skipped") for r in results) and not stopped else 1
 
 
 def initial_selection(steps: list[Step], selection: dict[str, bool] | None) -> set[str]:
@@ -1094,11 +1209,28 @@ def select_and_save(path: Path, selection: dict[str, bool] | None, title_prefix:
     return merged
 
 
+def run_self_update(use_self_update: bool, argv: list[str]) -> SelfUpdate | None:
+    """The self-update, or why it does not run. May restart the process."""
+    if os.environ.get("HAUSMEISTER_UPDATED") == "1":
+        # Restarted after the self-update or by tmux: show what the first process did.
+        return SelfUpdate.decode(os.environ.get("HAUSMEISTER_SELF", ""))
+    if not use_self_update:
+        result = SelfUpdate("skipped", "self_update = false in the config")
+    elif not os.environ.get("TMUX") and tmux_session_running(dict(os.environ)):
+        # Never change the step files under a run that is in progress.
+        result = SelfUpdate("skipped", "a run is in progress")
+    else:
+        result = self_update(SCRIPT, argv, os.execv)
+    os.environ["HAUSMEISTER_SELF"] = result.encode()  # for the restart in tmux
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="hausmeister", description="Update the system and your tools.")
     commands = parser.add_subparsers(dest="command")
     update_parser = commands.add_parser("update", help="run all selected steps that apply, then show an overview")
     update_parser.add_argument("--config", action="store_true", help="choose the steps, save them and stop")
+    argv = sys.argv[1:] if argv is None else argv
     args = parser.parse_args(argv)
 
     if args.command != "update":
@@ -1120,6 +1252,11 @@ def main(argv: list[str] | None = None) -> int:
             print("Nothing saved.")
         return 0
 
+    use_self_update, message = general_setting(config, "self_update")
+    if message:
+        warn(message)
+    self_result = run_self_update(use_self_update, argv)
+
     use_tmux, message = general_setting(config, "tmux")
     if message:
         warn(message)
@@ -1134,7 +1271,9 @@ def main(argv: list[str] | None = None) -> int:
         if selection is None:
             print("Nothing saved, nothing updated. Run hausmeister update again to choose the steps.")
     if selection is not None or not os.isatty(0):
-        code = update([STEPS_DIR, user_steps_dir()], log_dir=log_dir_path(), selection=selection)
+        code = update(
+            [STEPS_DIR, user_steps_dir()], log_dir=log_dir_path(), selection=selection, self_result=self_result
+        )
     if os.isatty(0):
         end_menu(
             lambda: read_key(0),
