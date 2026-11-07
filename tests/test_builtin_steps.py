@@ -29,6 +29,16 @@ class BuiltinStepsTest(unittest.TestCase):
                 if (folder / "check").exists():
                     self.assertTrue(hm.is_executable_file(folder / "check"))
 
+    def test_order(self):
+        """A step that needs another step runs right after it. Only the
+        system package managers share an order, one of them applies."""
+        ids = [s.id for s in hm.load_steps([STEPS])]
+        for first, second in (("rustup", "cargo"), ("claude", "claude-plugins"), ("gh-extensions", "gh-skills")):
+            with self.subTest(first=first):
+                self.assertEqual(ids.index(second), ids.index(first) + 1)
+        orders = [s.order for s in hm.load_steps([STEPS]) if s.id not in ("apt", "dnf", "rpm-ostree")]
+        self.assertEqual(len(orders), len(set(orders)))
+
     def test_no_release_upgrade(self):
         for folder in self.folders():
             for path in folder.iterdir():

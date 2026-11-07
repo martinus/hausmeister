@@ -1,4 +1,4 @@
 name = "Cargo programs"
 description = "Runs cargo install-update -a --git"
 needs = "cargo cargo-install-update"
-order = 45
+order = 41

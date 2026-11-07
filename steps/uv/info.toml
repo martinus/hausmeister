@@ -1,4 +1,4 @@
 name = "uv tools"
 description = "Runs uv tool upgrade --all"
 needs = "uv"
-order = 50
+order = 51

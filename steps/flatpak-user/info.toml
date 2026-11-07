@@ -1,4 +1,4 @@
 name = "Flatpak apps (user)"
 description = "Runs flatpak update --user"
 needs = "flatpak"
-order = 30
+order = 31
