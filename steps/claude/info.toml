@@ -1,4 +1,4 @@
 name = "Claude Code"
 description = "Runs claude update"
 needs = "claude"
-order = 50
+order = 60

@@ -128,21 +128,21 @@ Version 1 ships 19 step folders. The `self` step is not a folder: it is part of 
 | `rpm-ostree` | `rpm-ostree` | `/run/ostree-booted` exists | `$SUDO rpm-ostree upgrade` | yes | 10 |
 | `apt` | `apt-get` | always | `$SUDO apt-get update`, then `$SUDO apt-get full-upgrade -y` | yes | 10 |
 | `snap` | `snap` | always | `$SUDO snap refresh` | yes | 20 |
-| `flatpak-user` | `flatpak` | `flatpak remotes --user` is not empty | `flatpak update --user -y --noninteractive` | no | 30 |
+| `flatpak-user` | `flatpak` | `flatpak remotes --user` is not empty | `flatpak update --user -y --noninteractive` | no | 31 |
 | `flatpak-system` | `flatpak` | `flatpak remotes --system` is not empty | `$SUDO flatpak update --system -y --noninteractive` | yes | 30 |
-| `fwupd` | `fwupdmgr` | always | `$SUDO fwupdmgr refresh --force`, then `fwupdmgr get-updates`. Only reports, installs nothing. | yes | 30 |
+| `fwupd` | `fwupdmgr` | always | `$SUDO fwupdmgr refresh --force`, then `fwupdmgr get-updates`. Only reports, installs nothing. | yes | 35 |
 | `rustup` | `rustup` | always | `rustup update` | no | 40 |
-| `cargo` | `cargo cargo-install-update` | always | `cargo install-update -a --git` | no | 45 |
+| `cargo` | `cargo cargo-install-update` | always | `cargo install-update -a --git` | no | 41 |
 | `pipx` | `pipx` | `pipx list --short` is not empty | `pipx upgrade-all --include-injected` | no | 50 |
-| `uv` | `uv` | always | `uv tool upgrade --all` | no | 50 |
-| `npm` | `npm` | the global npm folder is writable | `npm update -g` | no | 50 |
-| `claude` | `claude` | always | `claude update` | no | 50 |
-| `claude-plugins` | `claude` | always | `claude plugin marketplace update` | no | 55 |
-| `gh-extensions` | `gh` | `gh extension list` is not empty | `gh extension upgrade --all` | no | 50 |
-| `gh-skills` | `gh` | `gh skill --help` works (newer gh only) | `gh skill update --all` | no | 50 |
-| `micro` | `micro` | always | `micro -plugin update` | no | 60 |
-| `distrobox` | `distrobox` | always | `distrobox upgrade --all` | no | 60 |
-| `tldr` | `tldr` | always | `tldr --update` | no | 70 |
+| `uv` | `uv` | always | `uv tool upgrade --all` | no | 51 |
+| `npm` | `npm` | the global npm folder is writable | `npm update -g` | no | 52 |
+| `claude` | `claude` | always | `claude update` | no | 60 |
+| `claude-plugins` | `claude` | always | `claude plugin marketplace update` | no | 61 |
+| `gh-extensions` | `gh` | `gh extension list` is not empty | `gh extension upgrade --all` | no | 70 |
+| `gh-skills` | `gh` | `gh skill --help` works (newer gh only) | `gh skill update --all` | no | 71 |
+| `micro` | `micro` | always | `micro -plugin update` | no | 80 |
+| `distrobox` | `distrobox` | always | `distrobox upgrade --all` | no | 85 |
+| `tldr` | `tldr` | always | `tldr --update` | no | 90 |
 
 All steps have `default = true`. `fwupd` only reports firmware updates and installs nothing, so it is safe to select by default. Firmware updates can need a reboot, so you install them yourself with `fwupdmgr update` when you have time.
 

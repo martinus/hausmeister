@@ -2,4 +2,4 @@ name = "Firmware"
 description = "Checks for firmware updates, installs nothing"
 needs = "fwupdmgr"
 sudo = true
-order = 30
+order = 35

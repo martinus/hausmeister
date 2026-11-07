@@ -1,4 +1,4 @@
 name = "gh extensions"
 description = "Runs gh extension upgrade --all"
 needs = "gh"
-order = 50
+order = 70
