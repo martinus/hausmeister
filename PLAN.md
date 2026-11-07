@@ -239,7 +239,7 @@ This part runs inside tmux. On Fedora and Ubuntu, sudo stores the cache per term
 The overview shows one line per step that ran, then one short line for the steps that did not apply, then a block for each failure with its reason, and at the end a menu.
 
 ```text
- hausmeister update · Fedora Linux 44 · 04:19 to 04:23 · 4 min 12 s
+ hausmeister v0.4.0 · Fedora Linux 44 · 04:19 to 04:23 · 4 min 12 s
 
  ok      self            v0.3.0 → v0.4.0                                    1.2 s
  ok      dnf             System packages (dnf)                              3 min 05 s
@@ -343,6 +343,7 @@ Version 1 has one command with one option. All other settings are in the config 
 | --- | --- |
 | `hausmeister update` | Update hausmeister itself, then run all selected steps that apply. Continue on failures, then show the overview. |
 | `hausmeister update --config` | Open the selection UI, save the selection, and stop. |
+| `hausmeister -v`, `--version` | Show the version: `git describe --tags --match 'v*' --always --dirty` of the clone, e.g. `v0.1.0`. `hausmeister update` shows it in its first line and in the overview header. |
 
 There are no other options. The tmux re-exec needs no hidden option, because it checks `$TMUX`. Without a dry run, the tests must cover the logic of the core, and you can test each step by hand (see Tests).
 

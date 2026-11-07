@@ -248,6 +248,16 @@ def first_error(proc: subprocess.CompletedProcess) -> str:
     return lines[0] if lines else f"exit code {proc.returncode}"
 
 
+def version(repo: Path | None = None) -> str:
+    """The version of the clone: "v0.1.0" at a release tag, "v0.1.0-3-gdae12fd"
+    after it, with "-dirty" for local changes, "unknown" without git."""
+    try:
+        proc = git(repo or SCRIPT.parent, "describe", "--tags", "--match", "v*", "--always", "--dirty")
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown"
+    return proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else "unknown"
+
+
 def self_update(script: Path, argv: list[str], exec_fn) -> SelfUpdate:
     """Update the clone of hausmeister to the newest v* tag and restart with
     exec_fn(file, argv). Returns only if there is no restart."""
@@ -853,13 +863,15 @@ def render_overview(
     stopped: bool,
     colours: bool = False,
     notes: list[str] | None = None,
+    running_version: str = "",
 ) -> str:
     def paint(text: str, colour: str) -> str:
         return f"{colour}{text}{RESET}" if colours else text
 
     total = (ended - started).total_seconds()
     out = [
-        f" hausmeister update · {distro.name} · {started:%H:%M} to {ended:%H:%M} · {format_duration(total)}",
+        f" {' '.join(filter(None, ['hausmeister', running_version]))} · {distro.name} · "
+        f"{started:%H:%M} to {ended:%H:%M} · {format_duration(total)}",
         "",
     ]
 
@@ -1156,10 +1168,12 @@ def update(
     log_dir: Path | None = None,
     selection: dict[str, bool] | None = None,
     self_result: SelfUpdate | None = None,
+    running_version: str = "",
 ) -> int:
     """Run the selected steps that apply. With log_dir, the output of each step
     also goes to <log_dir>/<step>.log, and the logs of the last run are removed."""
     distro, steps, env = discover(steps_dirs, os_release, ostree_booted)
+    write_all(out_fd, f"{' '.join(filter(None, ['hausmeister', running_version]))} · {distro.name}\n".encode())
 
     started = datetime.datetime.now()
     to_run, notes = steps_to_run(steps, selection)
@@ -1183,7 +1197,9 @@ def update(
         reason = self_result.text if self_result.status == "FAILED" else ""
         results.insert(0, Result(self_step, self_result.status, 0, self_result.duration, reason, self_result.text))
     now = datetime.datetime.now()
-    overview = render_overview(distro, steps, results, started, now, stopped, use_colours(out_fd, env), notes)
+    overview = render_overview(
+        distro, steps, results, started, now, stopped, use_colours(out_fd, env), notes, running_version
+    )
     write_all(out_fd, ("\n" + overview + "\n").encode())
     return 0 if all(r.status in ("ok", "skipped") for r in results) and not stopped else 1
 
@@ -1227,11 +1243,15 @@ def run_self_update(use_self_update: bool, argv: list[str]) -> SelfUpdate | None
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="hausmeister", description="Update the system and your tools.")
+    parser.add_argument("-v", "--version", action="store_true", help="show the version and stop")
     commands = parser.add_subparsers(dest="command")
     update_parser = commands.add_parser("update", help="run all selected steps that apply, then show an overview")
     update_parser.add_argument("--config", action="store_true", help="choose the steps, save them and stop")
     argv = sys.argv[1:] if argv is None else argv
     args = parser.parse_args(argv)
+    if args.version:
+        print(f"hausmeister {version()}")
+        return 0
 
     if args.command != "update":
         parser.print_help()
@@ -1272,7 +1292,11 @@ def main(argv: list[str] | None = None) -> int:
             print("Nothing saved, nothing updated. Run hausmeister update again to choose the steps.")
     if selection is not None or not os.isatty(0):
         code = update(
-            [STEPS_DIR, user_steps_dir()], log_dir=log_dir_path(), selection=selection, self_result=self_result
+            [STEPS_DIR, user_steps_dir()],
+            log_dir=log_dir_path(),
+            selection=selection,
+            self_result=self_result,
+            running_version=version(),
         )
     if os.isatty(0):
         end_menu(

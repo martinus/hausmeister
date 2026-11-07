@@ -195,6 +195,7 @@ class MainTest(unittest.TestCase):
         self.enterContext(mock.patch("sys.stderr", new=self.enterContext(tempfile.TemporaryFile(mode="w+"))))
         start_tmux = self.enterContext(mock.patch.object(hm, "start_tmux", return_value=""))
         self.enterContext(mock.patch.object(hm, "run_self_update", return_value=None))
+        self.enterContext(mock.patch.object(hm, "version", return_value="v0.0.0"))
         update = self.enterContext(mock.patch.object(hm, "update", return_value=1))
         end_menu = self.enterContext(mock.patch.object(hm, "end_menu"))
         self.select_and_save = self.enterContext(mock.patch.object(hm, "select_and_save", return_value={}))

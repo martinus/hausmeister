@@ -1,6 +1,7 @@
 """Milestone 6: the self-update. All git repositories are temporary, and the
 git config of the user is switched off."""
 
+import io
 import os
 import subprocess
 import sys
@@ -148,11 +149,11 @@ class RestartEndToEndTest(GitTestCase):
 
     def test_run_finishes_with_new_code_and_new_step(self):
         source = (ROOT / "hausmeister.py").read_text()
-        header = " hausmeister update · "
-        self.assertIn(header, source)
+        note = "No selection saved, so the default steps ran."
+        self.assertEqual(source.count(note), 1)
 
         def core(version):
-            return source.replace(header, f" hausmeister update {version} · ")
+            return source.replace(note, f"No selection saved, so the default steps ran ({version} code).")
 
         clone = self.make_clone(self.make_origin(["v0.1.0", "v0.2.0"], core), "v0.1.0")
         env = dict(os.environ, XDG_CONFIG_HOME=str(self.tmp / "config"), XDG_STATE_HOME=str(self.tmp / "state"))
@@ -166,11 +167,45 @@ class RestartEndToEndTest(GitTestCase):
             timeout=60,
         )
         self.assertEqual(describe(clone), "v0.2.0")
-        self.assertIn(" hausmeister update v0.2.0 · ", proc.stdout, proc.stderr)
+        self.assertIn("(v0.2.0 code)", proc.stdout, proc.stderr)
+        self.assertTrue(proc.stdout.startswith("hausmeister v0.2.0 · "), proc.stdout)
+        self.assertIn("\n hausmeister v0.2.0 · ", proc.stdout)
         self.assertIn("step v0.2.0", proc.stdout)
         self.assertNotIn("step v0.1.0", proc.stdout)
         self.assertRegex(proc.stdout, r" ok +self +v0\.1\.0 → v0\.2\.0 ")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+
+class VersionTest(GitTestCase):
+    def test_versions(self):
+        clone = self.make_clone(self.make_origin(["v0.1.0", "v0.2.0"]), "v0.1.0")
+        self.assertEqual(hm.version(clone), "v0.1.0")
+        git(clone, "checkout", "-q", "main")
+        git(clone, "commit", "-q", "--allow-empty", "-m", "after the release")
+        self.assertRegex(hm.version(clone), r"^v0\.2\.0-1-g[0-9a-f]+$")
+        write(clone / "hausmeister.py", "# changed\n")
+        self.assertRegex(hm.version(clone), r"^v0\.2\.0-1-g[0-9a-f]+-dirty$")
+
+    def test_no_git_clone(self):
+        self.assertEqual(hm.version(self.tmp), "unknown")
+
+    def test_main(self):
+        for flag in ("-v", "--version"):
+            with (
+                mock.patch.object(hm, "version", return_value="v9.9.9"),
+                mock.patch("sys.stdout", new=io.StringIO()) as out,
+            ):
+                self.assertEqual(hm.main([flag]), 0)
+            self.assertEqual(out.getvalue(), "hausmeister v9.9.9\n")
+
+    def test_run_shows_the_version(self):
+        with tempfile.TemporaryFile() as out:
+            os_release = write(self.tmp / "os-release", 'NAME="Fedora Linux"\nID=fedora\nVERSION_ID=44\n')
+            hm.update([self.tmp / "none"], os_release, self.tmp / "x", out.fileno(), running_version="v0.1.0")
+            out.seek(0)
+            text = out.read().decode()
+        self.assertTrue(text.startswith("hausmeister v0.1.0 · Fedora Linux 44\n"), text)
+        self.assertIn("\n hausmeister v0.1.0 · Fedora Linux 44 · ", text)
 
 
 class EncodeTest(unittest.TestCase):
