@@ -163,6 +163,17 @@ class EndMenuTest(unittest.TestCase):
                 self.assertEqual(self.menu([key]), hm.MENU + "\n")
                 self.assertEqual((self.runs, self.execs), ([], []))
 
+    def test_colours(self):
+        keys = iter(["p", "q"])
+        with tempfile.TemporaryFile() as out:
+            hm.end_menu(lambda: next(keys), lambda command: 1, None, "/bin/sh", out.fileno(), colours=True)
+            out.seek(0)
+            text = out.read().decode()
+        cap = "\x1b[1;7m"
+        menu = f" {cap} r \x1b[0m reboot   {cap} p \x1b[0m power off   {cap} s \x1b[0m shell   {cap} q \x1b[0m quit"
+        self.assertEqual(text, f"{menu}\n systemctl poweroff failed.\n{menu}\n")
+        self.assertEqual(hm.menu_text(False), hm.MENU)
+
     def test_other_keys_are_ignored(self):
         self.menu(["x", "R", "q"])
         self.assertEqual((self.runs, self.execs), ([], []))
@@ -189,7 +200,10 @@ class MainTest(unittest.TestCase):
         tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
         if config_text is not None:
             write(tmp / "hausmeister" / "config.toml", config_text)
-        self.enterContext(mock.patch.dict(os.environ, XDG_CONFIG_HOME=str(tmp), XDG_STATE_HOME=str(tmp / "state")))
+        self.enterContext(
+            mock.patch.dict(os.environ, XDG_CONFIG_HOME=str(tmp), XDG_STATE_HOME=str(tmp / "state"), TERM="xterm")
+        )
+        os.environ.pop("NO_COLOR", None)
         self.enterContext(mock.patch.object(hm.os, "geteuid", return_value=1000))
         self.enterContext(mock.patch.object(hm.os, "isatty", return_value=stdin_is_tty))
         self.enterContext(mock.patch("sys.stderr", new=self.enterContext(tempfile.TemporaryFile(mode="w+"))))
@@ -213,6 +227,7 @@ class MainTest(unittest.TestCase):
         start_tmux, end_menu = self.run_main(None, stdin_is_tty=True)
         self.assertTrue(start_tmux.call_args.args[1])
         end_menu.assert_called_once()
+        self.assertTrue(end_menu.call_args.args[5])  # colours: isatty is True, TERM is set in setUp
         _, end_menu = self.run_main(None, stdin_is_tty=False)
         end_menu.assert_not_called()
 

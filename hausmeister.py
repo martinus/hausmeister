@@ -922,6 +922,17 @@ def render_overview(
 REBOOT = ["systemctl", "reboot"]
 POWER_OFF = ["systemctl", "poweroff"]
 MENU = " [r] reboot · [p] power off · [s] shell · [q] quit"
+MENU_ITEMS = (("r", "reboot"), ("p", "power off"), ("s", "shell"), ("q", "quit"))
+KEY_CAP, KEY_CAP_END = "\x1b[1;7m", "\x1b[0m"
+
+
+def menu_text(colours: bool) -> str:
+    """With colours, each key looks like a key cap: reverse video."""
+    if not colours:
+        return MENU
+    return " " + "   ".join(f"{KEY_CAP} {key} {KEY_CAP_END} {label}" for key, label in MENU_ITEMS)
+
+
 QUIT_KEYS = ("q", "Q", "\r", "\n", "", "\x03", "\x04", "\x1b")
 
 
@@ -937,17 +948,18 @@ def read_key(fd: int) -> str:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-def end_menu(read, run, exec_fn, shell: str, out_fd: int) -> None:
+def end_menu(read, run, exec_fn, shell: str, out_fd: int, colours: bool = False) -> None:
     """The menu after the overview. read() returns a key, run(argv) an exit
     code, exec_fn(file, argv) replaces the process with the shell."""
-    write_all(out_fd, (MENU + "\n").encode())
+    menu = menu_text(colours)
+    write_all(out_fd, (menu + "\n").encode())
     while True:
         key = read()
         if key in ("r", "p"):
             command = REBOOT if key == "r" else POWER_OFF
             if run(command) == 0:
                 return
-            write_all(out_fd, f" {' '.join(command)} failed.\n{MENU}\n".encode())
+            write_all(out_fd, f" {' '.join(command)} failed.\n{menu}\n".encode())
         elif key == "s":
             exec_fn(shell, [shell])
             return
@@ -1305,6 +1317,7 @@ def main(argv: list[str] | None = None) -> int:
             os.execvp,
             os.environ.get("SHELL") or "/bin/sh",
             1,
+            use_colours(1, dict(os.environ)),
         )
     return code
 
