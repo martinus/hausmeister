@@ -3,7 +3,7 @@
 `hausmeister update` updates the system packages and your tools with one command. It works like [topgrade](https://github.com/topgrade-rs/topgrade), but the core is a single Python file without dependencies, and each update step is a small folder with a script that you can read in a minute.
 
 ```text
- hausmeister update · Fedora Linux 44 · 04:19 to 04:23 · 4 min 12 s
+ hausmeister v0.4.0 · Fedora Linux 44 · 04:19 to 04:23 · 4 min 12 s
 
  ok        self            v0.3.0 → v0.4.0                                    1.2 s
  ok        dnf             System packages (dnf)                              3 min 05 s
@@ -49,6 +49,7 @@ The checkout of the newest tag is important. On a branch, hausmeister treats the
 ```bash
 hausmeister update            # update everything you selected
 hausmeister update --config   # choose the steps, save them, and stop
+hausmeister -v                # show the version
 ```
 
 On the first run, `hausmeister update` shows the list of steps before it starts. The steps that apply to your machine are selected. Space toggles a step, Enter saves. A step that comes later, e.g. with a new release, does not run until you select it with `hausmeister update --config`. The overview tells you about it.

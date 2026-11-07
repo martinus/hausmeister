@@ -233,6 +233,7 @@ class MainConfigTest(unittest.TestCase):
         self.choose = self.enterContext(mock.patch.object(hm, "choose_steps", return_value={"dnf": False, "apt": True}))
         self.start_tmux = self.enterContext(mock.patch.object(hm, "start_tmux", return_value=""))
         self.self_update = self.enterContext(mock.patch.object(hm, "run_self_update", return_value=None))
+        self.enterContext(mock.patch.object(hm, "version", return_value="v0.0.0"))
         self.update = self.enterContext(mock.patch.object(hm, "update", return_value=0))
         self.enterContext(mock.patch.object(hm, "end_menu"))
 

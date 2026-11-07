@@ -166,7 +166,7 @@ class OverviewTest(unittest.TestCase):
             text,
             "\n".join(
                 [
-                    " hausmeister update · Fedora Linux 44 · 04:19 to 04:23 · 4 min 12 s",
+                    " hausmeister · Fedora Linux 44 · 04:19 to 04:23 · 4 min 12 s",
                     "",
                     " ok        dnf             System packages (dnf)                              3 min 05 s",
                     " ok        fwupd           Firmware updates available. Run: fwupdmgr update   4.0 s",
@@ -227,7 +227,7 @@ class UpdateCommandTest(unittest.TestCase):
     def test_failures_give_exit_code_1(self):
         code, out = self.update(FIXTURE_STEPS)
         self.assertEqual(code, 1)
-        self.assertIn(" hausmeister update · Fedora Linux 44 · ", out)
+        self.assertIn(" hausmeister · Fedora Linux 44 · ", out)
         self.assertIn(" ✘ reason · exit code 3\n   Reason: Network is down", out)
         self.assertIn(" Reboot needed (reboot).", out)
 
