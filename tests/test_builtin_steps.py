@@ -1,5 +1,6 @@
 """The step check from PLAN.md, for all built-in step folders."""
 
+import re
 import tomllib
 import unittest
 
@@ -38,6 +39,11 @@ class BuiltinStepsTest(unittest.TestCase):
                 self.assertEqual(ids.index(second), ids.index(first) + 1)
         orders = [s.order for s in hm.load_steps([STEPS]) if s.id not in ("apt", "dnf", "rpm-ostree")]
         self.assertEqual(len(orders), len(set(orders)))
+
+    def test_readme_lists_all_steps_in_run_order(self):
+        rows = re.findall(r"^\| `([a-z0-9-]+)` \|", (ROOT / "README.md").read_text(), re.M)
+        steps_table = [r for r in rows if r in {p.name for p in self.folders()}]
+        self.assertEqual(steps_table, [s.id for s in hm.load_steps([STEPS])])
 
     def test_no_release_upgrade(self):
         for folder in self.folders():
